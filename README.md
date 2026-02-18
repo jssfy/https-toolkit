@@ -277,13 +277,18 @@ https-deploy up (项目根目录，需要 Dockerfile + config.yaml)
 
 ## 依赖
 
-| 工具 | 用途 | 安装 | 必需 |
-|------|------|------|------|
-| Docker | 运行容器 | `brew install docker` | 所有模式 |
-| mkcert | 本地 SSL 证书 | `brew install mkcert && mkcert -install` | 仅 mkcert 模式 |
-| jq | JSON 处理 | `brew install jq` | 所有模式 |
-| yq | YAML 处理 | `brew install yq` | 所有模式 |
+| 工具 | 用途 | 安装方式 | 必需 |
+|------|------|---------|------|
+| Docker | 运行容器 | macOS: `brew install docker` / Linux: [官方文档](https://docs.docker.com/engine/install/) | 所有模式 |
+| mkcert | 本地 SSL 证书 | macOS: `brew install mkcert` / Linux: [releases](https://github.com/FiloSottile/mkcert/releases) | 仅 mkcert 模式 |
+| jq | JSON 处理 | `make install-jq` | 所有模式 |
+| yq | YAML 处理 | `make install-yq` | 所有模式 |
 | acme.sh | Let's Encrypt 客户端 | 自动通过 Docker 拉取 (`neilpang/acme.sh`) | 仅 LE 模式 |
+
+```bash
+# 一键安装 jq + yq（自动检测 macOS/Linux 和 CPU 架构）
+make deps
+```
 
 ## 故障排查
 

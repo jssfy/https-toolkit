@@ -1,7 +1,7 @@
 # HTTPS Toolkit Makefile
 # 简化常用操作的快捷命令
 
-.PHONY: help install uninstall test clean gateway-init gateway-stop gateway-clean gateway-status gateway-list gateway-logs dev
+.PHONY: help install uninstall test clean gateway-init gateway-stop gateway-clean gateway-status gateway-list gateway-logs dev deps install-jq install-yq
 
 # 默认目标: 显示帮助
 help:
@@ -29,6 +29,11 @@ help:
 	@echo "  make dashboard        - 在浏览器打开 Dashboard"
 	@echo "  make hosts            - 配置 /etc/hosts (需要 sudo)"
 	@echo ""
+	@echo "依赖安装:"
+	@echo "  make deps             - 安装 jq + yq (自动检测 macOS/Linux)"
+	@echo "  make install-jq       - 仅安装 jq"
+	@echo "  make install-yq       - 仅安装 yq"
+	@echo ""
 	@echo "工具信息:"
 	@echo "  make version          - 显示版本信息"
 	@echo "  make doctor           - 检查依赖和环境"
@@ -50,6 +55,38 @@ uninstall:
 	@echo "🗑️  卸载 HTTPS Toolkit..."
 	@rm -rf ~/.https-toolkit
 	@echo "✅ 已卸载"
+
+# ============================================
+# 依赖安装
+# ============================================
+
+OS := $(shell uname -s)
+ARCH := $(shell uname -m)
+
+install-jq:
+ifeq ($(OS),Darwin)
+	@command -v jq >/dev/null 2>&1 && echo "jq already installed" || brew install jq
+else
+	@command -v jq >/dev/null 2>&1 && echo "jq already installed" || sudo apt-get install -y jq 2>/dev/null || sudo yum install -y jq
+endif
+
+install-yq:
+ifeq ($(OS),Darwin)
+	@command -v yq >/dev/null 2>&1 && echo "yq already installed" || brew install yq
+else
+	@if command -v yq >/dev/null 2>&1; then echo "yq already installed"; else \
+		YQ_ARCH=$$([ "$(ARCH)" = "aarch64" ] || [ "$(ARCH)" = "arm64" ] && echo "arm64" || echo "amd64"); \
+		sudo wget -qO /usr/local/bin/yq "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_$${YQ_ARCH}"; \
+		sudo chmod +x /usr/local/bin/yq; \
+		echo "yq installed successfully"; \
+	fi
+endif
+
+deps: install-jq install-yq
+	@echo ""
+	@jq --version
+	@yq --version
+	@echo "All dependencies installed"
 
 # ============================================
 # 网关管理
@@ -153,8 +190,8 @@ doctor:
 	@echo "依赖检查:"
 	@command -v docker >/dev/null 2>&1 && echo "  ✅ Docker" || echo "  ❌ Docker (未安装)"
 	@command -v docker-compose >/dev/null 2>&1 && echo "  ✅ Docker Compose" || echo "  ⚠️  Docker Compose (可选)"
-	@command -v jq >/dev/null 2>&1 && echo "  ✅ jq" || echo "  ❌ jq (必需: brew install jq)"
-	@command -v yq >/dev/null 2>&1 && echo "  ✅ yq" || echo "  ❌ yq (必需: brew install yq)"
+	@command -v jq >/dev/null 2>&1 && echo "  ✅ jq" || echo "  ❌ jq (make install-jq)"
+	@command -v yq >/dev/null 2>&1 && echo "  ✅ yq" || echo "  ❌ yq (make install-yq)"
 	@command -v curl >/dev/null 2>&1 && echo "  ✅ curl" || echo "  ❌ curl"
 	@command -v mkcert >/dev/null 2>&1 && echo "  ✅ mkcert" || echo "  ❌ mkcert (必需: brew install mkcert)"
 	@echo ""

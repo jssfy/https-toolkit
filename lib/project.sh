@@ -1,6 +1,15 @@
 #!/bin/bash
 # Project deployment
 
+# docker compose 兼容：优先使用插件模式，回退到独立命令
+docker_compose() {
+    if docker compose version &> /dev/null; then
+        docker compose "$@"
+    else
+        docker-compose "$@"
+    fi
+}
+
 # 初始化项目
 project_init() {
     local template="${1:-default}"
@@ -123,7 +132,7 @@ networks:
 EOF
 
     # 启动服务
-    docker-compose -f .https-toolkit/output/docker-compose-$env.yml up -d --build
+    docker_compose -f .https-toolkit/output/docker-compose-$env.yml up -d --build
 
     # 等待就绪（失败不阻断后续注册）
     sleep 1
@@ -323,7 +332,7 @@ project_down() {
 
     # 停止容器
     if [ -f .https-toolkit/output/docker-compose-$env.yml ]; then
-        docker-compose -f .https-toolkit/output/docker-compose-$env.yml down
+        docker_compose -f .https-toolkit/output/docker-compose-$env.yml down
     else
         stop_container "$project_name"
     fi
