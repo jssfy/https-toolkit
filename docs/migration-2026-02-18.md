@@ -7,7 +7,7 @@
 - https-toolkit 从 top-ai-news 项目独立，迁移到独立目录维护
 - 域名从 `dev.local` 切换为 `local.yeanhua.asia`（DNS 预配置，无需 `/etc/hosts`）
 - 新增 `register` / `unregister` 命令，支持非 Docker 服务注册
-- 修复了 12 个影响可用性的 bug，当前所有端点验证通过
+- 修复了 13 个影响可用性的 bug，当前所有端点验证通过
 
 ---
 
@@ -248,6 +248,47 @@ try_files $uri $uri/ /index.html;
 try_files $uri $uri/ =404;
 ```
 
+### Fix 11: mkcert -install 条件判断错误
+
+**现象**: `gateway init` 后浏览器仍显示证书不受信任。
+
+**原因**: 代码判断 `[ ! -d "$(mkcert -CAROOT)" ]`，检查的是 CAROOT **目录**是否存在，而非 CA 是否已安装到系统钥匙串。用户之前使用过 mkcert，目录已存在（2025-07-27 创建），导致 `mkcert -install` 被跳过，CA 未写入钥匙串。
+
+**修复** (`lib/gateway.sh`): 去掉条件判断，始终执行（`mkcert -install` 是幂等操作）：
+```bash
+# 修改前 — CAROOT 目录存在就跳过
+if [ ! -d "$(mkcert -CAROOT)" ]; then
+    mkcert -install
+fi
+
+# 修改后 — 始终执行，已安装时无副作用
+mkcert -install
+```
+
+### Fix 12: Dashboard 不显示新注册的项目
+
+**现象**: `https-deploy up` 注册新项目后，Dashboard 仍只显示旧项目。`gateway list` 和 API 都能看到新项目。
+
+**原因**: `/_gateway/registry/projects.json` 没有设置缓存控制头。浏览器默认缓存响应，Dashboard 的 `fetch()` 每 5 秒请求时命中缓存，不向服务器发起新请求。
+
+**修复** (`lib/gateway.sh`): 给 `/_gateway/` 添加禁止缓存头：
+```nginx
+# 修改前
+location /_gateway/ {
+    alias /usr/share/nginx/html/_gateway/;
+    autoindex on;
+    autoindex_format json;
+}
+
+# 修改后
+location /_gateway/ {
+    alias /usr/share/nginx/html/_gateway/;
+    autoindex on;
+    autoindex_format json;
+    add_header Cache-Control "no-cache, no-store, must-revalidate";
+}
+```
+
 ---
 
 ## 四、新增功能
@@ -331,3 +372,6 @@ openssl verify -CAfile "$(mkcert -CAROOT)/rootCA.pem" \
 | `/style.css`（根级别）| HTTP 404 |
 | `https-deploy register` (host 模式) | 注册成功 |
 | `https-deploy up` (Docker 模式) | 构建+启动+注册成功 |
+| `mkcert -install` 幂等执行 | CA 已在系统钥匙串 |
+| `/_gateway/` Cache-Control 头 | `no-cache, no-store, must-revalidate` |
+| Dashboard 显示多项目 | 注册后立即可见 |

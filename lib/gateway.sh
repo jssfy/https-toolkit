@@ -119,11 +119,12 @@ server {
         try_files \$uri \$uri/ =404;
     }
 
-    # 静态文件
+    # 静态文件（注册表 JSON 禁止缓存）
     location /_gateway/ {
         alias /usr/share/nginx/html/_gateway/;
         autoindex on;
         autoindex_format json;
+        add_header Cache-Control "no-cache, no-store, must-revalidate";
     }
 
     # 健康检查

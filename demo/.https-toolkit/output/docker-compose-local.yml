@@ -1,7 +1,7 @@
 services:
-  demo:
-    image: demo:latest
-    container_name: demo
+  my-api:
+    image: my-api:latest
+    container_name: my-api
     build:
       context: /Users/yeanhua/workspace/playground/claude/https-toolkit/demo
       dockerfile: Dockerfile
