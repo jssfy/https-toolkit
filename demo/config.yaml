@@ -1,0 +1,17 @@
+project:
+  name: demo
+  backend_port: 8080
+
+routing:
+  path_prefix: /demo
+  strip_prefix: true
+
+domains:
+  local: local.yeanhua.asia
+
+gateway:
+  enabled: true
+
+health_check:
+  enabled: true
+  path: /health

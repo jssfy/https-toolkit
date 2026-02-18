@@ -163,11 +163,8 @@ gateway_generate_certificate() {
         fi
     fi
 
-    # 安装 CA (首次)
-    if [ ! -d "$(mkcert -CAROOT)" ]; then
-        info "  Installing local CA root certificate..."
-        mkcert -install
-    fi
+    # 安装 CA 到系统钥匙串（幂等，已安装时无副作用）
+    mkcert -install
 
     # 生成证书
     cd "$cert_dir"

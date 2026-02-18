@@ -24,7 +24,15 @@ https-deploy gateway init
 open https://local.yeanhua.asia
 ```
 
-部署你的第一个项目：
+用内置 demo 项目验证：
+
+```bash
+cd https-toolkit/demo
+https-deploy up          # 构建 + 启动 + 注册（config.yaml 已预置）
+open https://local.yeanhua.asia/demo/
+```
+
+或部署你自己的项目：
 
 ```bash
 cd your-project          # 进入项目根目录（需要有 Dockerfile）

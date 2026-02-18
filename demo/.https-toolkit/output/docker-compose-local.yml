@@ -1,0 +1,23 @@
+services:
+  demo:
+    image: demo:latest
+    container_name: demo
+    build:
+      context: /Users/yeanhua/workspace/playground/claude/https-toolkit/demo
+      dockerfile: Dockerfile
+    networks:
+      - https-toolkit-network
+    environment:
+      - TZ=Asia/Shanghai
+      - PORT=8080
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO", "/dev/null", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  https-toolkit-network:
+    external: true
