@@ -2,7 +2,7 @@
 
 ## 核心结论
 
-本次部署和测试中遇到 4 个问题，均已修复。根因集中在两个方面：跨平台兼容性（macOS vs Linux）和 gateway init 的状态管理。
+本次部署和测试中遇到 5 个问题，均已修复，1 个已知行为待评估。根因集中在三个方面：跨平台兼容性（macOS vs Linux）、gateway init 的状态管理、以及 Nginx 默认域名匹配行为。
 
 ---
 
@@ -17,14 +17,12 @@
 
 **根因**: `gateway clean` 停止了项目容器并删除了网络，但没有清理 `nginx/conf.d/projects/` 下的项目配置文件。nginx 启动时 resolve upstream 失败。
 
-**修复**: 手动删除残留配置文件后重启。
-
-**建议**: `gateway_clean()` 应增加清理项目 nginx 配置的逻辑：
+**修复**: 在 `gateway_clean()` 中停止网关之前，先清理项目 nginx 配置：
 ```bash
 rm -f "$GATEWAY_ROOT/nginx/conf.d/projects/"*.conf
 ```
 
-**状态**: 临时修复（手动删除），待后续补全到 `gateway_clean()`
+**状态**: 已修复
 
 ---
 
@@ -121,6 +119,52 @@ chmod 644 ~/.https-toolkit/gateway/registry/projects.json
 
 ---
 
+## Issue #6: Gateway 响应所有解析到本机的域名（已知行为）
+
+**现象**: 任意域名（只要 DNS 解析到 gateway 所在服务器 IP）访问 443 端口，gateway 均正常响应，不限于配置的目标域名。
+
+```bash
+# 用 IP 直接访问，伪造 Host 头，也能拿到正常响应
+curl -sk https://121.41.107.93/health -H "Host: anything.example.com"
+# OK
+```
+
+**根因**: Nginx `00-default.conf` 中的 server 块没有使用 `default_server` 指令，也没有兜底 server 块。当只有一个 server 块时，Nginx 的行为是：**任何未匹配到其他 server_name 的请求都由第一个 server 块处理**（即使 Host 不在 `server_name` 列表中）。
+
+当前配置：
+```nginx
+server {
+    listen 443 ssl;
+    server_name yeanhua.asia *.yeanhua.asia;  # 只配了目标域名
+    ...
+}
+# 没有其他 server 块 → 所有请求都走这个
+```
+
+**影响**:
+- **安全**: 非目标域名的请求也会被代理转发到后端服务
+- **实际**: 在阿里云等有 ICP 备案管控的环境中，未备案域名会被运营商在 TLS SNI 层面直接 reset 连接，所以实际影响有限
+- **合规**: 如果服务器不在有 ICP 管控的环境中（如海外），任意域名都能访问到服务
+
+**可选修复**: 添加 `default_server` 块拒绝非目标域名的请求：
+
+```nginx
+# 在 00-default.conf 中新增（放在目标 server 块之前）
+server {
+    listen 443 ssl default_server;
+    server_name _;
+    ssl_certificate /etc/nginx/certs/<domain>/fullchain.pem;
+    ssl_certificate_key /etc/nginx/certs/<domain>/privkey.pem;
+    return 444;  # 直接关闭连接，不返回任何内容
+}
+```
+
+> 注意：`default_server` 块也需要有效的 SSL 证书，因为 TLS 握手在 HTTP 路由之前。可以复用目标域名的证书。
+
+**状态**: 已知行为，当前未修复（在 ICP 管控环境下影响可控），可根据需要添加 `default_server` 块
+
+---
+
 ## 修复文件汇总
 
 | 文件 | Issue | 改动 |
@@ -129,4 +173,5 @@ chmod 644 ~/.https-toolkit/gateway/registry/projects.json
 | `lib/project.sh` | #3 | 新增 `docker_compose()` 兼容函数 |
 | `lib/project.sh` | #5 | `mv` 后 `chmod 644`（注册 + 注销两处） |
 | `Makefile` | #4 | 新增 `deps` / `install-jq` / `install-yq` target |
-| `lib/gateway.sh` | #1 | 待补全：clean 时删除项目配置 |
+| `lib/gateway.sh` | #1 | clean 时删除 `nginx/conf.d/projects/*.conf` |
+| `lib/gateway.sh` | #6 | 可选：添加 default_server 块拒绝非目标域名 |

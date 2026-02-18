@@ -756,6 +756,10 @@ gateway_clean() {
         done
     fi
 
+    # 清理项目 nginx 配置
+    rm -f "$GATEWAY_ROOT/nginx/conf.d/projects/"*.conf
+    info "  ✓ Removed project nginx configs"
+
     # 停止网关
     gateway_stop
 

@@ -260,6 +260,59 @@ openssl x509 -in ~/.https-toolkit/gateway/certs/yeanhua.asia/fullchain.pem -noou
 openssl x509 -in ~/.https-toolkit/gateway/certs/yeanhua.asia/fullchain.pem -noout -text
 ```
 
+## Nginx 域名匹配行为
+
+### 当前行为
+
+Gateway 的 `00-default.conf` 只有一个 server 块，配置了目标域名的 `server_name`。由于没有其他 server 块，Nginx 的默认行为是：**所有未匹配到 server_name 的请求也由该 server 处理**。
+
+```
+请求 Host: yeanhua.asia         → 匹配 server_name → 正常处理 ✓
+请求 Host: app.yeanhua.asia     → 匹配 *.yeanhua.asia → 正常处理 ✓
+请求 Host: other.example.com    → 无匹配 → 仍由唯一 server 处理 ⚠️
+请求 Host: (直接用 IP 访问)      → 无匹配 → 仍由唯一 server 处理 ⚠️
+```
+
+### 原因
+
+Nginx 匹配逻辑：
+1. 精确匹配 `server_name` → 使用对应 server
+2. 通配符匹配 → 使用对应 server
+3. 都不匹配 → 使用 `default_server`（或第一个 server 块）
+
+当前只有一个 server 块，它自动成为兜底。
+
+### 影响与缓解
+
+| 环境 | 影响 | 说明 |
+|------|------|------|
+| 阿里云（有 ICP 管控） | 低 | 未备案域名在 TLS SNI 层被运营商 reset，请求到不了 Nginx |
+| 海外/无管控服务器 | 中 | 任意域名解析到 IP 都能访问服务 |
+| 本地开发 (mkcert) | 无 | 只有 `local.yeanhua.asia` 解析到 127.0.0.1 |
+
+### 可选加固：default_server 块
+
+如需严格限制只允许目标域名访问，可在 `gateway_generate_nginx_config()` 中添加 `default_server` 块：
+
+```nginx
+# 拒绝非目标域名（放在目标 server 块之前）
+server {
+    listen 443 ssl default_server;
+    server_name _;
+    ssl_certificate /etc/nginx/certs/<domain>/fullchain.pem;
+    ssl_certificate_key /etc/nginx/certs/<domain>/privkey.pem;
+    return 444;  # 关闭连接
+}
+
+server {
+    listen 80 default_server;
+    server_name _;
+    return 444;
+}
+```
+
+> `default_server` 的 443 块也需要 SSL 证书（TLS 握手先于 HTTP 路由），可复用目标域名证书。`444` 是 Nginx 特殊状态码，直接关闭 TCP 连接不返回任何内容。
+
 ## 目录结构
 
 ```
