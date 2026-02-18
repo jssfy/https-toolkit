@@ -4,19 +4,121 @@
 GATEWAY_NAME="https-toolkit-gateway"
 GATEWAY_NETWORK="https-toolkit-network"
 GATEWAY_DOMAIN="local.yeanhua.asia"
+CERT_MODE="mkcert"
+LETSENCRYPT_EMAIL=""
+GATEWAY_CONF="$HOME/.https-toolkit/gateway/gateway.conf"
+ACME_HOME="$HOME/.https-toolkit/gateway/acme"
 
+# ========================================
+# 配置持久化
+# ========================================
+
+# 加载网关配置
+gateway_load_config() {
+    if [ -f "$GATEWAY_CONF" ]; then
+        source "$GATEWAY_CONF"
+    fi
+}
+
+# 保存网关配置
+gateway_save_config() {
+    mkdir -p "$(dirname "$GATEWAY_CONF")"
+    cat > "$GATEWAY_CONF" <<EOF
+# HTTPS Toolkit Gateway Configuration
+# Generated at $(timestamp)
+CERT_MODE=$CERT_MODE
+GATEWAY_DOMAIN=$GATEWAY_DOMAIN
+LETSENCRYPT_EMAIL=$LETSENCRYPT_EMAIL
+EOF
+    info "  ✓ Saved configuration to gateway.conf"
+}
+
+# 启动时自动加载已保存的配置
+gateway_load_config
+
+# ========================================
 # 初始化网关
-gateway_init() {
-    local env="${1:-local}"
+# ========================================
 
-    info "Initializing HTTPS Gateway for $env environment..."
+gateway_init() {
+    # 解析参数
+    local env="local"
+    local domain_explicit=false
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --cert-mode)
+                CERT_MODE="$2"
+                shift 2
+                ;;
+            --domain)
+                GATEWAY_DOMAIN="$2"
+                domain_explicit=true
+                shift 2
+                ;;
+            --email)
+                LETSENCRYPT_EMAIL="$2"
+                shift 2
+                ;;
+            *)
+                env="$1"
+                shift
+                ;;
+        esac
+    done
+
+    # 验证 cert mode
+    case "$CERT_MODE" in
+        mkcert|letsencrypt|letsencrypt-wildcard) ;;
+        *)
+            error "Invalid cert mode: $CERT_MODE"
+            echo "Valid modes: mkcert, letsencrypt, letsencrypt-wildcard"
+            return 1
+            ;;
+    esac
+
+    # 设置默认域名（仅当用户未通过 --domain 显式指定时）
+    if [ "$domain_explicit" = false ]; then
+        case "$CERT_MODE" in
+            mkcert)
+                GATEWAY_DOMAIN="local.yeanhua.asia"
+                ;;
+            letsencrypt)
+                GATEWAY_DOMAIN="data.yeanhua.asia"
+                ;;
+            letsencrypt-wildcard)
+                GATEWAY_DOMAIN="yeanhua.asia"
+                ;;
+        esac
+    fi
+
+    # Let's Encrypt 模式需要邮箱
+    if [[ "$CERT_MODE" == letsencrypt* ]] && [ -z "$LETSENCRYPT_EMAIL" ]; then
+        read -p "Enter email for Let's Encrypt registration: " LETSENCRYPT_EMAIL
+        if [ -z "$LETSENCRYPT_EMAIL" ]; then
+            error "Email is required for Let's Encrypt"
+            return 1
+        fi
+    fi
+
+    info "Initializing HTTPS Gateway..."
+    info "  Cert mode: $CERT_MODE"
+    info "  Domain:    $GATEWAY_DOMAIN"
 
     # 检查依赖
     check_dependencies || return 1
 
+    # Let's Encrypt 模式需要 acme.sh 镜像
+    if [[ "$CERT_MODE" == letsencrypt* ]]; then
+        check_acme_sh || return 1
+    fi
+
     # 创建目录结构
     mkdir -p "$GATEWAY_ROOT"/{nginx/conf.d/projects,certs,registry,html}
+    mkdir -p "$ACME_HOME"
     info "  ✓ Created directory structure"
+
+    # 保存配置
+    gateway_save_config
 
     # 生成 Nginx 配置
     gateway_generate_nginx_config "$env"
@@ -38,8 +140,14 @@ gateway_init() {
     gateway_generate_dashboard
     info "  ✓ Generated Gateway Dashboard"
 
-    # 启动网关
-    gateway_start "$env"
+    # 启动或重载网关
+    if check_container "$GATEWAY_NAME"; then
+        info "  Gateway already running, reloading configuration..."
+        docker exec "$GATEWAY_NAME" nginx -s reload
+        info "  ✓ Gateway reloaded"
+    else
+        gateway_start "$env"
+    fi
 
     info "✓ Gateway initialized successfully!"
     echo ""
@@ -84,11 +192,19 @@ http {
 }
 EOF
 
+    # 计算 server_name 和证书目录
+    local server_name="$GATEWAY_DOMAIN"
+    local cert_domain="$GATEWAY_DOMAIN"
+    if [ "$CERT_MODE" = "letsencrypt-wildcard" ]; then
+        server_name="$GATEWAY_DOMAIN *.$GATEWAY_DOMAIN"
+        cert_domain="$GATEWAY_DOMAIN"
+    fi
+
     # 生成默认服务器配置
     cat > "$GATEWAY_ROOT/nginx/conf.d/00-default.conf" <<EOF
 server {
     listen 80;
-    server_name $GATEWAY_DOMAIN;
+    server_name $server_name;
 
     # 重定向到 HTTPS
     location / {
@@ -99,11 +215,11 @@ server {
 server {
     listen 443 ssl;
     http2 on;
-    server_name $GATEWAY_DOMAIN;
+    server_name $server_name;
 
     # SSL 配置
-    ssl_certificate /etc/nginx/certs/$GATEWAY_DOMAIN/fullchain.pem;
-    ssl_certificate_key /etc/nginx/certs/$GATEWAY_DOMAIN/privkey.pem;
+    ssl_certificate /etc/nginx/certs/$cert_domain/fullchain.pem;
+    ssl_certificate_key /etc/nginx/certs/$cert_domain/privkey.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_ciphers HIGH:!aNULL:!MD5;
 
@@ -140,11 +256,33 @@ server {
 EOF
 }
 
-# 生成证书
+# ========================================
+# 证书生成（分发函数）
+# ========================================
+
 gateway_generate_certificate() {
     local env="$1"
-    local cert_dir="$GATEWAY_ROOT/certs/$GATEWAY_DOMAIN"
 
+    case "$CERT_MODE" in
+        mkcert)
+            gateway_cert_mkcert
+            ;;
+        letsencrypt)
+            gateway_cert_letsencrypt
+            ;;
+        letsencrypt-wildcard)
+            gateway_cert_letsencrypt_wildcard
+            ;;
+        *)
+            error "Unknown cert mode: $CERT_MODE"
+            return 1
+            ;;
+    esac
+}
+
+# mkcert 模式（本地开发）
+gateway_cert_mkcert() {
+    local cert_dir="$GATEWAY_ROOT/certs/$GATEWAY_DOMAIN"
     mkdir -p "$cert_dir"
 
     # 检查是否已存在
@@ -174,6 +312,160 @@ gateway_generate_certificate() {
     # 重命名（先 key 后 cert，避免 glob 冲突）
     mv ${GATEWAY_DOMAIN}+*-key.pem privkey.pem 2>/dev/null || true
     mv ${GATEWAY_DOMAIN}+*.pem fullchain.pem 2>/dev/null || true
+}
+
+# Let's Encrypt 单域名模式（HTTP-01 standalone）
+gateway_cert_letsencrypt() {
+    local cert_dir="$GATEWAY_ROOT/certs/$GATEWAY_DOMAIN"
+    mkdir -p "$cert_dir"
+
+    # 检查是否已存在
+    if [ -f "$cert_dir/fullchain.pem" ] && [ -f "$cert_dir/privkey.pem" ]; then
+        info "  Certificate already exists"
+        return 0
+    fi
+
+    # 需要 80 端口空闲，先停 gateway（如果在运行）
+    if check_container "$GATEWAY_NAME"; then
+        warn "  Stopping gateway to free port 80 for ACME challenge..."
+        gateway_stop
+    fi
+
+    info "  Issuing certificate for $GATEWAY_DOMAIN via HTTP-01 standalone..."
+
+    docker run --rm \
+        -v "$ACME_HOME":/acme.sh \
+        --net=host \
+        neilpang/acme.sh \
+        --issue -d "$GATEWAY_DOMAIN" \
+        --standalone \
+        --server letsencrypt \
+        --email "$LETSENCRYPT_EMAIL"
+
+    if [ $? -ne 0 ]; then
+        error "  Failed to issue certificate"
+        return 1
+    fi
+
+    # 安装证书到标准目录
+    info "  Installing certificate to certs directory..."
+    docker run --rm \
+        -v "$ACME_HOME":/acme.sh \
+        -v "$GATEWAY_ROOT/certs":/certs \
+        neilpang/acme.sh \
+        --install-cert -d "$GATEWAY_DOMAIN" \
+        --key-file       /certs/"$GATEWAY_DOMAIN"/privkey.pem \
+        --fullchain-file /certs/"$GATEWAY_DOMAIN"/fullchain.pem
+}
+
+# Let's Encrypt 泛域名模式（DNS-01 via dns_ali）
+gateway_cert_letsencrypt_wildcard() {
+    local cert_dir="$GATEWAY_ROOT/certs/$GATEWAY_DOMAIN"
+    mkdir -p "$cert_dir"
+
+    # 检查是否已存在
+    if [ -f "$cert_dir/fullchain.pem" ] && [ -f "$cert_dir/privkey.pem" ]; then
+        info "  Certificate already exists"
+        return 0
+    fi
+
+    # 检查阿里云 DNS API 凭据
+    local ali_key=""
+    local ali_secret=""
+
+    # 尝试从 acme.sh 的 account.conf 读取
+    if [ -f "$ACME_HOME/account.conf" ]; then
+        ali_key=$(sed -n "s/^SAVED_Ali_Key='\{0,1\}\([^']*\)'\{0,1\}$/\1/p" "$ACME_HOME/account.conf" 2>/dev/null || true)
+        ali_secret=$(sed -n "s/^SAVED_Ali_Secret='\{0,1\}\([^']*\)'\{0,1\}$/\1/p" "$ACME_HOME/account.conf" 2>/dev/null || true)
+    fi
+
+    # 如果没有保存的凭据，交互输入
+    if [ -z "$ali_key" ] || [ -z "$ali_secret" ]; then
+        info "  Alibaba Cloud DNS API credentials required for wildcard certificate"
+        read -p "  Ali_Key: " ali_key
+        read -s -p "  Ali_Secret: " ali_secret
+        echo ""
+
+        if [ -z "$ali_key" ] || [ -z "$ali_secret" ]; then
+            error "  Ali_Key and Ali_Secret are required for DNS-01 validation"
+            return 1
+        fi
+    fi
+
+    info "  Issuing wildcard certificate for *.$GATEWAY_DOMAIN via DNS-01..."
+
+    docker run --rm -it \
+        -v "$ACME_HOME":/acme.sh \
+        -e Ali_Key="$ali_key" \
+        -e Ali_Secret="$ali_secret" \
+        neilpang/acme.sh \
+        --issue \
+        -d "$GATEWAY_DOMAIN" \
+        -d "*.$GATEWAY_DOMAIN" \
+        --dns dns_ali \
+        --server letsencrypt \
+        --email "$LETSENCRYPT_EMAIL"
+
+    if [ $? -ne 0 ]; then
+        error "  Failed to issue wildcard certificate"
+        return 1
+    fi
+
+    # 安装证书到标准目录
+    info "  Installing certificate to certs directory..."
+    docker run --rm \
+        -v "$ACME_HOME":/acme.sh \
+        -v "$GATEWAY_ROOT/certs":/certs \
+        neilpang/acme.sh \
+        --install-cert -d "$GATEWAY_DOMAIN" \
+        --key-file       /certs/"$GATEWAY_DOMAIN"/privkey.pem \
+        --fullchain-file /certs/"$GATEWAY_DOMAIN"/fullchain.pem
+}
+
+# 证书续期
+gateway_cert_renew() {
+    gateway_load_config
+
+    if [ "$CERT_MODE" = "mkcert" ]; then
+        info "mkcert certificates don't need renewal"
+        return 0
+    fi
+
+    info "Renewing certificates (mode: $CERT_MODE, domain: $GATEWAY_DOMAIN)..."
+
+    # 需要 80 端口空闲（HTTP-01 模式）
+    local was_running=false
+    if [ "$CERT_MODE" = "letsencrypt" ] && check_container "$GATEWAY_NAME"; then
+        was_running=true
+        warn "Stopping gateway to free port 80 for ACME renewal..."
+        gateway_stop
+    fi
+
+    docker run --rm \
+        -v "$ACME_HOME":/acme.sh \
+        -v "$GATEWAY_ROOT/certs":/certs \
+        neilpang/acme.sh \
+        --cron
+
+    if [ $? -ne 0 ]; then
+        error "Certificate renewal failed"
+        # 尝试重启网关
+        if [ "$was_running" = true ]; then
+            gateway_start
+        fi
+        return 1
+    fi
+
+    info "✓ Certificate renewal completed"
+
+    # 重启网关以加载新证书
+    if check_container "$GATEWAY_NAME"; then
+        gateway_restart
+        info "✓ Gateway restarted with renewed certificate"
+    elif [ "$was_running" = true ]; then
+        gateway_start
+        info "✓ Gateway restarted with renewed certificate"
+    fi
 }
 
 # 初始化注册表
@@ -385,10 +677,13 @@ gateway_status() {
     docker ps --filter "name=$GATEWAY_NAME" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
     echo ""
 
+    info "Cert mode:   $CERT_MODE"
+    info "Domain:      $GATEWAY_DOMAIN"
+    info "Gateway URL: https://$GATEWAY_DOMAIN"
+    echo ""
+
     local project_count=$(jq '.projects | length' "$GATEWAY_ROOT/registry/projects.json" 2>/dev/null || echo "0")
     info "Registered projects: $project_count"
-    echo ""
-    info "Gateway URL: https://$GATEWAY_DOMAIN"
 }
 
 # 列出项目

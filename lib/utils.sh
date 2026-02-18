@@ -80,6 +80,15 @@ check_jq() {
     return 0
 }
 
+# 检查 acme.sh Docker 镜像
+check_acme_sh() {
+    if ! docker image inspect neilpang/acme.sh &> /dev/null; then
+        info "Pulling acme.sh Docker image..."
+        docker pull neilpang/acme.sh
+    fi
+    return 0
+}
+
 # 检查所有依赖
 check_dependencies() {
     local missing=0

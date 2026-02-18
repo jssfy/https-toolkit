@@ -66,6 +66,9 @@ gateway_command() {
         clean)
             gateway_clean "$@"
             ;;
+        renew)
+            gateway_cert_renew "$@"
+            ;;
         *)
             error "Unknown gateway command: $subcommand"
             echo ""
@@ -80,6 +83,7 @@ gateway_command() {
             echo "  reload    - Reload gateway configuration"
             echo "  test      - Test gateway configuration"
             echo "  clean     - Clean gateway and all projects"
+            echo "  renew     - Renew Let's Encrypt certificates"
             exit 1
             ;;
     esac
@@ -95,11 +99,15 @@ HTTPS Deployment Toolkit v$VERSION
 Usage: https-deploy <command> [options]
 
 Gateway Management:
-  gateway init              Initialize HTTPS gateway
+  gateway init [options]    Initialize HTTPS gateway
+    --cert-mode <mode>      Certificate mode: mkcert (default), letsencrypt, letsencrypt-wildcard
+    --domain <domain>       Domain name (defaults vary by cert mode)
+    --email <email>         Email for Let's Encrypt registration
   gateway status            Show gateway status
   gateway list              List all registered projects
   gateway logs [-f]         Show gateway logs
   gateway reload            Reload gateway configuration
+  gateway renew             Renew Let's Encrypt certificates
   gateway clean             Clean gateway and all projects
 
 Project Deployment:
@@ -124,9 +132,23 @@ Utilities:
   version                   Show version
   help                      Show this help
 
+Certificate Modes:
+  mkcert                    Local development (default). Uses mkcert for trusted local certs.
+  letsencrypt               Single domain, HTTP-01 validation. Default domain: data.yeanhua.asia
+  letsencrypt-wildcard      Wildcard domain, DNS-01 via Alibaba Cloud DNS. Default: *.yeanhua.asia
+
 Examples:
-  # Initialize gateway (first time)
+  # Initialize gateway with local cert (default)
   https-deploy gateway init
+
+  # Initialize with Let's Encrypt single domain
+  https-deploy gateway init --cert-mode letsencrypt --domain data.yeanhua.asia
+
+  # Initialize with Let's Encrypt wildcard
+  https-deploy gateway init --cert-mode letsencrypt-wildcard --domain yeanhua.asia
+
+  # Renew Let's Encrypt certificates
+  https-deploy gateway renew
 
   # Docker project: build + start + register
   https-deploy init && https-deploy up

@@ -139,23 +139,107 @@ location /news/ {
 - 尾部斜杠重定向确保浏览器相对路径解析正确
 - Dashboard 使用 `try_files $uri $uri/ =404`，不 catch-all 避免污染项目静态资源
 
-### 2. 两种部署模式
+### 2. `https-deploy up` 完整流程
+
+```
+https-deploy up [env]    （env 默认 "local"，在项目根目录执行）
+│
+│ project_up()  ← lib/project.sh
+│
+├─ ① check_dependencies        检查 docker, docker-compose, yq, jq
+├─ ② check_container           检查网关是否运行，未运行则提示初始化
+├─ ③ config_validate            验证 config.yaml 必填字段
+├─ ④ config_get                 读取配置值
+│     .project.name         → 容器名（如 "my-api"）
+│     .project.backend_port → 服务端口（如 8080）
+│     .routing.path_prefix  → URL 前缀（如 "/api"）
+│     .routing.strip_prefix → 是否去除前缀（如 true）
+│     .domains.$env         → 域名（如 "local.yeanhua.asia"）
+│
+├─ ⑤ check_path_conflict       检查注册表中是否有其他项目占用同一路径
+│
+├─ ⑥ project_start_backend     ← 生成 docker-compose 并启动容器
+│     │
+│     ├─ 读取 health_check.path（可选）
+│     ├─ mkdir -p .https-toolkit/output
+│     ├─ 生成 .https-toolkit/output/docker-compose-{env}.yml  ← 见下方详解
+│     ├─ docker-compose -f ... up -d --build
+│     └─ wait_for_service（TCP 端口检测 + 可选 HTTP 健康检查）
+│
+└─ ⑦ project_register          ← 生成 nginx 配置并注册
+      │
+      ├─ 生成 ~/.https-toolkit/gateway/nginx/conf.d/projects/{name}.conf
+      ├─ docker exec nginx -t（测试配置，失败则回滚）
+      ├─ jq 更新 registry/projects.json
+      └─ docker exec nginx -s reload（~50ms 热重载）
+```
+
+#### docker-compose 文件的生成与使用
+
+**生成位置**：`project_start_backend()` (`lib/project.sh:86-123`)
+
+**生成路径**：`{项目根目录}/.https-toolkit/output/docker-compose-{env}.yml`
+
+**生成方式**：`cat > ... <<EOF` 模板渲染，变量来自 `config.yaml`：
+
+```yaml
+# .https-toolkit/output/docker-compose-local.yml（自动生成，勿手动编辑）
+services:
+  my-api:                                    # ← config: project.name
+    image: my-api:latest                     # ← 同上
+    container_name: my-api                   # ← 同上
+    build:
+      context: /absolute/path/to/project     # ← $(pwd)，项目根目录绝对路径
+      dockerfile: Dockerfile                 # ← 固定，读取项目根目录的 Dockerfile
+    networks:
+      - https-toolkit-network                # ← 加入网关网络，不暴露端口到宿主机
+    environment:
+      - TZ=Asia/Shanghai
+      - PORT=8080                            # ← config: project.backend_port
+    restart: unless-stopped
+    healthcheck:                             # ← 仅当 health_check.enabled=true 时追加
+      test: ["CMD", "wget", "-qO", "/dev/null", "http://localhost:8080/health"]
+      interval: 30s                          #    ↑ config: health_check.path
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  https-toolkit-network:
+    external: true                           # ← 使用 gateway init 创建的已有网络
+```
+
+**使用时机**：
+
+| 命令 | 操作 |
+|------|------|
+| `https-deploy up` | `docker-compose -f ... up -d --build` 构建镜像并启动容器 |
+| `https-deploy down` | `docker-compose -f ... down` 停止并删除容器 |
+
+**设计要点**：
+- `context` 使用绝对路径，因为 compose 文件在 `.https-toolkit/output/` 下，相对路径 `.` 会指向 output 目录而非项目根目录
+- 不映射端口到宿主机（无 `ports:`），业务容器仅通过 Docker 网络与网关通信
+- 多项目可使用相同 `backend_port`（如都用 8080），因为各容器有独立网络命名空间
+
+### 3. 两种部署模式的网络差异
 
 ```
 Docker 模式 (up):
-  项目 Dockerfile → docker-compose build → 容器启动 → 注册到网关
-  backend_host = 容器名（Docker 网络内互通）
+  gateway 容器 → my-api:8080        容器名即 DNS，同一 Docker 网络内直连
+  backend_host = project_name
 
 注册模式 (register):
-  宿主机已运行服务 → 仅注册到网关
-  backend_host = host.docker.internal（网关容器访问宿主机）
+  gateway 容器 → host.docker.internal:8080 → 宿主机 localhost:8080
+  backend_host = "host.docker.internal"     Docker Desktop 特殊 DNS
 ```
 
 `project_register()` 的 `$6 backend_host` 参数控制上游地址：
-- Docker 模式：默认使用 `$project_name`（容器名）
-- 注册模式：传 `"host"` → 转换为 `host.docker.internal`
+- Docker 模式（`up`）：默认使用 `$project_name`（容器名）
+- 注册模式（`register`）：传 `"host"` → 自动转换为 `host.docker.internal`
 
-### 3. 健康检查策略
+> `host.docker.internal` 是 Docker Desktop（macOS/Windows）内置的 DNS 名称，容器内解析为宿主机 IP。Linux 原生 Docker 需启动时加 `--add-host=host.docker.internal:host-gateway`。
+
+### 4. 健康检查策略
 
 ```bash
 wait_for_service() {
