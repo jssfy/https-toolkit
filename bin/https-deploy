@@ -1,0 +1,225 @@
+#!/bin/bash
+# HTTPS Deployment Toolkit - Main Script
+# Version: 1.0.0
+
+set -e
+
+# ========================================
+# 全局变量
+# ========================================
+# 解析符号链接，找到真实安装路径
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+while [ -L "$SCRIPT_PATH" ]; do
+    SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+    SCRIPT_PATH="$(readlink "$SCRIPT_PATH")"
+    [[ "$SCRIPT_PATH" != /* ]] && SCRIPT_PATH="$SCRIPT_DIR/$SCRIPT_PATH"
+done
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+TOOLKIT_ROOT="$(dirname "$SCRIPT_DIR")"
+GATEWAY_ROOT="$HOME/.https-toolkit/gateway"
+PROJECT_CONFIG="config.yaml"
+VERSION="1.0.0"
+
+# ========================================
+# 加载库文件
+# ========================================
+source "$TOOLKIT_ROOT/lib/utils.sh"
+source "$TOOLKIT_ROOT/lib/config.sh"
+source "$TOOLKIT_ROOT/lib/gateway.sh"
+source "$TOOLKIT_ROOT/lib/project.sh"
+
+# ========================================
+# 命令: gateway
+# ========================================
+gateway_command() {
+    local subcommand="${1:-status}"
+    shift || true
+
+    case "$subcommand" in
+        init)
+            gateway_init "$@"
+            ;;
+        start)
+            gateway_start "$@"
+            ;;
+        stop)
+            gateway_stop "$@"
+            ;;
+        restart)
+            gateway_restart "$@"
+            ;;
+        status)
+            gateway_status "$@"
+            ;;
+        list)
+            gateway_list_projects "$@"
+            ;;
+        logs)
+            gateway_logs "$@"
+            ;;
+        reload)
+            gateway_reload "$@"
+            ;;
+        test)
+            gateway_test_config "$@"
+            ;;
+        clean)
+            gateway_clean "$@"
+            ;;
+        *)
+            error "Unknown gateway command: $subcommand"
+            echo ""
+            echo "Available commands:"
+            echo "  init      - Initialize gateway"
+            echo "  start     - Start gateway"
+            echo "  stop      - Stop gateway"
+            echo "  restart   - Restart gateway"
+            echo "  status    - Show gateway status"
+            echo "  list      - List registered projects"
+            echo "  logs      - Show gateway logs"
+            echo "  reload    - Reload gateway configuration"
+            echo "  test      - Test gateway configuration"
+            echo "  clean     - Clean gateway and all projects"
+            exit 1
+            ;;
+    esac
+}
+
+# ========================================
+# 显示帮助
+# ========================================
+show_help() {
+    cat <<EOF
+HTTPS Deployment Toolkit v$VERSION
+
+Usage: https-deploy <command> [options]
+
+Gateway Management:
+  gateway init              Initialize HTTPS gateway
+  gateway status            Show gateway status
+  gateway list              List all registered projects
+  gateway logs [-f]         Show gateway logs
+  gateway reload            Reload gateway configuration
+  gateway clean             Clean gateway and all projects
+
+Project Deployment:
+  init                      Initialize project configuration
+  up [env]                  Build + start + register (Docker, needs Dockerfile)
+  down [env]                Stop and unregister project
+  restart [env]             Restart project
+  register [env]            Register existing service (no Docker, uses host port)
+  unregister                Unregister from gateway only
+  logs [-f]                 Show project logs
+  status                    Show project status
+
+Routing:
+  routes                    Show all routes
+  test-route <path>         Test a specific route
+
+Configuration:
+  config show               Show project configuration
+  config validate           Validate configuration
+
+Utilities:
+  version                   Show version
+  help                      Show this help
+
+Examples:
+  # Initialize gateway (first time)
+  https-deploy gateway init
+
+  # Docker project: build + start + register
+  https-deploy init && https-deploy up
+
+  # Local service (go run, npm start, etc): just register
+  https-deploy init && https-deploy register
+
+  # View all projects
+  https-deploy gateway list
+
+  # Test route
+  https-deploy test-route /api/health
+
+Documentation: https://github.com/your-org/https-toolkit
+EOF
+}
+
+# ========================================
+# 显示版本
+# ========================================
+show_version() {
+    echo "HTTPS Deployment Toolkit v$VERSION"
+    echo "Copyright (c) 2026"
+}
+
+# ========================================
+# 主函数
+# ========================================
+main() {
+    local command="${1:-help}"
+    shift || true
+
+    case "$command" in
+        # 网关管理
+        gateway)
+            gateway_command "$@"
+            ;;
+
+        # 项目部署
+        init)
+            project_init "$@"
+            ;;
+        up)
+            project_up "$@"
+            ;;
+        down)
+            project_down "$@"
+            ;;
+        restart)
+            project_restart "$@"
+            ;;
+        register)
+            project_register_only "$@"
+            ;;
+        unregister)
+            project_unregister_only "$@"
+            ;;
+        logs)
+            project_logs "$@"
+            ;;
+        status)
+            project_status "$@"
+            ;;
+
+        # 路由管理
+        routes)
+            gateway_show_routes "$@"
+            ;;
+        test-route)
+            gateway_test_route "$@"
+            ;;
+
+        # 配置管理
+        config)
+            config_command "$@"
+            ;;
+
+        # 帮助和版本
+        help|--help|-h)
+            show_help
+            ;;
+        version|--version|-v)
+            show_version
+            ;;
+
+        *)
+            error "Unknown command: $command"
+            echo ""
+            echo "Run 'https-deploy help' for usage"
+            exit 1
+            ;;
+    esac
+}
+
+# 执行主函数
+main "$@"
