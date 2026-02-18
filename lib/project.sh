@@ -239,6 +239,7 @@ EOF
        .updated_at = $now
        ' "$registry_file" > "$tmp_file"
     mv "$tmp_file" "$registry_file"
+    chmod 644 "$registry_file"
 
     info "  ✓ Updated registry"
 
@@ -366,6 +367,7 @@ project_unregister() {
        'del(.projects[] | select(.name == $name)) | .updated_at = $now' \
        "$registry_file" > "$tmp_file"
     mv "$tmp_file" "$registry_file"
+    chmod 644 "$registry_file"
     info "  ✓ Updated registry"
 
     # 重载 Nginx
